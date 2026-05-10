@@ -178,4 +178,4 @@ sip/
 
 ## License
 
-MIT © [Shivam Bhoyar](https://github.com/babyaga852)
+[Shivam Bhoyar](https://github.com/babyaga852) © [Shivam Bhoyar](https://github.com/babyaga852)
