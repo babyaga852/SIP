@@ -1,0 +1,14 @@
+{
+  "name": "sip",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "libuv",
+    "boost-filesystem",
+    "boost-asio",
+    "spdlog",
+    "nlohmann-json",
+    "sqlite3",
+    "ftxui",
+    "gtest"
+  ]
+}

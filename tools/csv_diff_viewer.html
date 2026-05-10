@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIP — CSV diff export viewer</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+       background:#0f1117;color:#e2e8f0;min-height:100vh;padding:24px}
+  h1{font-size:20px;font-weight:500;margin-bottom:4px;color:#e2e8f0}
+  .sub{font-size:13px;color:#718096;margin-bottom:20px}
+  .toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+  .drop-zone{border:2px dashed #4a5568;border-radius:10px;padding:32px 24px;
+             text-align:center;cursor:pointer;color:#718096;transition:.2s;
+             margin-bottom:20px}
+  .drop-zone:hover,.drop-zone.drag{border-color:#7c3aed;color:#a78bfa}
+  .drop-zone input{display:none}
+  select,input[type=text]{background:#1e2130;border:1px solid #2d3748;
+    border-radius:6px;color:#e2e8f0;padding:6px 10px;font-size:13px;outline:none}
+  select:focus,input[type=text]:focus{border-color:#7c3aed}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:500}
+  .added{background:#064e3b;color:#6ee7b7}
+  .removed{background:#4c0519;color:#fca5a5}
+  .changed{background:#44350a;color:#fde68a}
+  .stats{display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap}
+  .stat-card{background:#1a1d2e;border:1px solid #2d3748;border-radius:8px;
+             padding:14px 18px;min-width:120px}
+  .stat-val{font-size:24px;font-weight:500}
+  .stat-lbl{font-size:12px;color:#718096;margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;padding:8px 12px;color:#718096;font-weight:500;
+     border-bottom:1px solid #2d3748;position:sticky;top:0;background:#0f1117;
+     cursor:pointer;user-select:none}
+  th:hover{color:#e2e8f0}
+  td{padding:8px 12px;border-bottom:1px solid #1e2130;vertical-align:top;
+     word-break:break-all;max-width:300px}
+  tr:hover td{background:#1a1d2e}
+  .json-cell{font-family:'Fira Code',monospace;font-size:11px;color:#9ca3af;
+             max-height:80px;overflow:auto}
+  .empty{text-align:center;padding:60px;color:#4a5568}
+  .chart-wrap{background:#1a1d2e;border:1px solid #2d3748;border-radius:10px;
+              padding:20px;margin-bottom:20px}
+  .chart-title{font-size:13px;font-weight:500;margin-bottom:14px;color:#a0aec0}
+  canvas{width:100%!important;max-height:200px}
+  .tbl-wrap{overflow-x:auto;border:1px solid #2d3748;border-radius:10px}
+  .search-row{display:flex;gap:8px;align-items:center}
+  .badge{background:#2d3748;padding:2px 7px;border-radius:4px;font-size:11px;color:#a0aec0}
+  #sort-asc::after{content:' ↑'}
+  #sort-desc::after{content:' ↓'}
+</style>
+</head>
+<body>
+<h1>SIP — CSV Diff Export Viewer</h1>
+<p class="sub">Load a CSV exported by the StateDiff module to inspect system state changes.</p>
+
+<div class="drop-zone" id="drop-zone">
+  <input type="file" id="file-input" accept=".csv">
+  <div style="font-size:32px;margin-bottom:8px">📂</div>
+  <div>Drop <code>sip_state_diff.csv</code> here or <strong>click to browse</strong></div>
+  <div style="font-size:12px;margin-top:6px">Columns: key, op, before, after</div>
+</div>
+
+<div id="app" style="display:none">
+  <div class="stats">
+    <div class="stat-card"><div class="stat-val added" id="s-added">0</div><div class="stat-lbl">Added</div></div>
+    <div class="stat-card"><div class="stat-val removed" id="s-removed">0</div><div class="stat-lbl">Removed</div></div>
+    <div class="stat-card"><div class="stat-val changed" id="s-changed">0</div><div class="stat-lbl">Changed</div></div>
+    <div class="stat-card"><div class="stat-val" id="s-total">0</div><div class="stat-lbl">Total diffs</div></div>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">Diff operation breakdown</div>
+    <canvas id="op-chart" height="180"></canvas>
+  </div>
+
+  <div class="chart-wrap">
+    <div class="chart-title">Key namespace distribution (top 10)</div>
+    <canvas id="key-chart" height="180"></canvas>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-row">
+      <input type="text" id="search" placeholder="Filter by key…" style="width:220px">
+      <span class="badge" id="row-count">0 rows</span>
+    </div>
+    <select id="op-filter">
+      <option value="">All operations</option>
+      <option value="added">added</option>
+      <option value="removed">removed</option>
+      <option value="changed">changed</option>
+    </select>
+    <select id="sort-col">
+      <option value="key">Sort by key</option>
+      <option value="op">Sort by op</option>
+    </select>
+    <select id="sort-dir">
+      <option value="asc">↑ asc</option>
+      <option value="desc">↓ desc</option>
+    </select>
+  </div>
+
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-col="key">Key</th>
+          <th data-col="op">Operation</th>
+          <th>Before</th>
+          <th>After</th>
+        </tr>
+      </thead>
+      <tbody id="tbl-body"></tbody>
+    </table>
+    <div class="empty" id="no-rows" style="display:none">No rows match the current filter.</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let allRows = [];
+let opChart, keyChart;
+
+const COLORS = {
+  added:   { bg:'rgba(16,185,129,0.25)', border:'#10b981' },
+  removed: { bg:'rgba(239,68,68,0.25)',  border:'#ef4444' },
+  changed: { bg:'rgba(245,158,11,0.25)', border:'#f59e0b' },
+};
+
+// ── File loading ──────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave',  () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+function loadFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => processCSV(e.target.result);
+  reader.readAsText(file);
+}
+
+// ── CSV parsing ───────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const rows = [];
+  // Skip header
+  for (let i = 1; i < lines.length; i++) {
+    // Naive CSV: key,op,json,json — handle commas inside JSON via state machine
+    const row = splitCSVLine(lines[i]);
+    if (row.length >= 4)
+      rows.push({ key: row[0], op: row[1], before: row[2], after: row.slice(3).join(',') });
+  }
+  return rows;
+}
+
+function splitCSVLine(line) {
+  const result = []; let cur = ''; let depth = 0; let inStr = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"' && !inStr) { inStr = true; continue; }
+    if (c === '"' && inStr)  { inStr = false; continue; }
+    if ((c === '{' || c === '[') && !inStr) depth++;
+    if ((c === '}' || c === ']') && !inStr) depth--;
+    if (c === ',' && depth === 0 && !inStr) { result.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+function processCSV(text) {
+  allRows = parseCSV(text);
+  document.getElementById('drop-zone').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  updateStats(); buildCharts(); renderTable();
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats() {
+  const counts = { added: 0, removed: 0, changed: 0 };
+  allRows.forEach(r => { if (counts[r.op] !== undefined) counts[r.op]++; });
+  document.getElementById('s-added').textContent   = counts.added;
+  document.getElementById('s-removed').textContent = counts.removed;
+  document.getElementById('s-changed').textContent = counts.changed;
+  document.getElementById('s-total').textContent   = allRows.length;
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+function buildCharts() {
+  const ops = ['added','removed','changed'];
+  const opCounts = ops.map(op => allRows.filter(r => r.op === op).length);
+
+  const cfg = {
+    responsive: true,
+    plugins: { legend: { labels: { color:'#a0aec0', boxWidth:12 } } },
+    scales: {
+      x: { ticks:{color:'#718096'}, grid:{color:'rgba(255,255,255,0.05)'} },
+      y: { ticks:{color:'#718096'}, grid:{color:'rgba(255,255,255,0.05)'}, beginAtZero:true }
+    }
+  };
+
+  if (opChart) opChart.destroy();
+  opChart = new Chart(document.getElementById('op-chart'), {
+    type: 'bar',
+    data: {
+      labels: ops,
+      datasets: [{
+        label: 'Count',
+        data: opCounts,
+        backgroundColor: ops.map(o => COLORS[o].bg),
+        borderColor:     ops.map(o => COLORS[o].border),
+        borderWidth: 1.5, borderRadius: 4
+      }]
+    },
+    options: { ...cfg }
+  });
+
+  // Key namespace breakdown
+  const ns = {};
+  allRows.forEach(r => {
+    const k = r.key.split('.').slice(0,2).join('.') || r.key;
+    ns[k] = (ns[k]||0) + 1;
+  });
+  const sorted = Object.entries(ns).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+  if (keyChart) keyChart.destroy();
+  keyChart = new Chart(document.getElementById('key-chart'), {
+    type: 'bar',
+    data: {
+      labels: sorted.map(([k])=>k),
+      datasets: [{
+        label: 'Diffs',
+        data: sorted.map(([,v])=>v),
+        backgroundColor: 'rgba(124,58,237,0.3)',
+        borderColor: '#7c3aed',
+        borderWidth: 1.5, borderRadius: 4
+      }]
+    },
+    options: { ...cfg, indexAxis: 'y' }
+  });
+}
+
+// ── Table rendering ───────────────────────────────────────────────────────────
+function filteredRows() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const opFilter = document.getElementById('op-filter').value;
+  const sortCol  = document.getElementById('sort-col').value;
+  const sortDir  = document.getElementById('sort-dir').value;
+
+  let rows = allRows.filter(r =>
+    (!search   || r.key.toLowerCase().includes(search)) &&
+    (!opFilter || r.op === opFilter)
+  );
+
+  rows.sort((a,b) => {
+    const cmp = a[sortCol].localeCompare(b[sortCol]);
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+  return rows;
+}
+
+function prettyJSON(s) {
+  try { return JSON.stringify(JSON.parse(s), null, 2); }
+  catch { return s; }
+}
+
+function renderTable() {
+  const rows = filteredRows();
+  document.getElementById('row-count').textContent = rows.length + ' rows';
+  const tbody = document.getElementById('tbl-body');
+
+  if (rows.length === 0) {
+    tbody.innerHTML = '';
+    document.getElementById('no-rows').style.display = 'block';
+    return;
+  }
+  document.getElementById('no-rows').style.display = 'none';
+
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td style="font-family:monospace;font-size:12px">${escHtml(r.key)}</td>
+      <td><span class="pill ${r.op}">${r.op}</span></td>
+      <td><pre class="json-cell">${escHtml(prettyJSON(r.before))}</pre></td>
+      <td><pre class="json-cell">${escHtml(prettyJSON(r.after))}</pre></td>
+    </tr>`).join('');
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+['search','op-filter','sort-col','sort-dir'].forEach(id => {
+  document.getElementById(id).addEventListener('input', renderTable);
+  document.getElementById(id).addEventListener('change', renderTable);
+});
+
+// ── Demo data if no file dropped (for quick preview) ─────────────────────────
+window.loadDemo = function() {
+  const demo = [
+    'key,op,before,after',
+    'processes.1234,added,,{"name":"sip","cpu":1.2,"rss":4096000}',
+    'processes.999,removed,{"name":"old_daemon","cpu":0.1,"rss":2048000},',
+    'net.eth0,changed,{"rx":1000,"tx":500},{"rx":2500,"tx":1200}',
+    'thermal.cpu0,changed,{"temp_c":51.0},{"temp_c":72.3}',
+    'processes.5678,added,,{"name":"nginx","cpu":0.5,"rss":8192000}',
+    'net.lo,changed,{"rx":100,"tx":100},{"rx":200,"tx":200}',
+    'processes.111,removed,{"name":"defunct","cpu":0,"rss":0},',
+    'thermal.battery,changed,{"temp_c":31.0},{"temp_c":33.5}',
+  ].join('\n');
+  processCSV(demo);
+};
+</script>
+<div style="margin-top:16px;text-align:center">
+  <button onclick="loadDemo()"
+    style="background:#1e2130;border:1px solid #2d3748;color:#a0aec0;
+           padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px">
+    Load demo data
+  </button>
+</div>
+</body>
+</html>

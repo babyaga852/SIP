@@ -1,0 +1,13 @@
+build/
+*.o
+*.a
+*.so
+sip.db
+sip_snapshot.json
+sip_diff.csv
+compile_commands.json
+.cache/
+.vscode/
+.idea/
+*.swp
+*~
